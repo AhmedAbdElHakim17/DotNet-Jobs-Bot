@@ -27,9 +27,14 @@ def send_job(job):
 
 
 def _send_job_listing(job):
-    source = "Wuzzuf" if "wuzzuf.net" in job.link else "LinkedIn Jobs"
+    if "wuzzuf.net" in job.link:
+        badge = "🟠 *Job — Wuzzuf*"
+        source = "Wuzzuf"
+    else:
+        badge = "🔵 *Job — LinkedIn*"
+        source = "LinkedIn Jobs"
     time_str = _relative_time(job.posted)
-    parts = [f"*{job.title}*"]
+    parts = [badge, f"*{job.title}*"]
     if job.company:
         parts.append(f"🏢 {job.company}")
     if job.location:
@@ -49,7 +54,7 @@ def _send_post(job):
     if len(job.description) > 700:
         preview += "..."
     parts = [
-        "📢 *Hiring Post*",
+        "📢 *Post — LinkedIn*",
         "",
         preview,
         "",
