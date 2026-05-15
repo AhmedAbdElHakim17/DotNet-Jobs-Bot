@@ -1,6 +1,5 @@
-requests
-python-dotenv
+requests>=2.31.0
+python-dotenv>=1.0.0
+feedparser>=6.0.11
 python-jobspy>=1.1.0
-beautifulsoup4
-lxml
-linkedin-api
+pandas>=2.0.0

@@ -2,11 +2,11 @@ name: .NET Jobs Bot
 
 on:
   schedule:
-    - cron: '*/10 * * * *'     # Every 10 minutes
-  workflow_dispatch:           # Allow manual trigger
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
 
 permissions:
-  contents: write              # Grant write access to push commits
+  contents: write
 
 jobs:
   run-bot:
@@ -26,15 +26,13 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run .NET Jobs Bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
-          LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
+          LINKEDIN_RSS_URLS: ${{ secrets.LINKEDIN_RSS_URLS }}
           BOT_CI_FAST: "1"
         run: python main.py
 
@@ -45,6 +43,14 @@ jobs:
           git add seen_jobs.json
           if ! git diff --staged --quiet; then
             git commit -m "chore: update seen_jobs [skip ci]"
-            git pull --rebase origin "${GITHUB_REF_NAME}"
-            git push origin "${GITHUB_REF_NAME}"
+            ok=0
+            for attempt in 1 2 3 4 5; do
+              git fetch origin "${GITHUB_REF_NAME}"
+              if git rebase "origin/${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
+                ok=1
+                break
+              fi
+              sleep "$attempt"
+            done
+            test "$ok" -eq 1
           fi
