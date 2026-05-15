@@ -8,39 +8,64 @@ from bs4 import BeautifulSoup
 from jobspy import scrape_jobs
 from models import Job
 from config import SEARCH_KEYWORDS, LOCATIONS, INCLUDE_KEYWORDS, LINKEDIN_EMAIL, LINKEDIN_PASSWORD
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+
+# Thread-safe lock for managing shared data structures
+_jobs_lock = threading.Lock()
 
 def _safe(val, default=""):
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return default
     return str(val)
 
+def _fetch_linkedin_single_search(keyword: str, location: str) -> list[Job]:
+    """Fetch LinkedIn jobs for a single keyword+location combination."""
+    jobs = []
+    try:
+        df = scrape_jobs(
+            site_name=["linkedin"],
+            search_term=keyword,
+            location=location,
+            results_wanted=20,
+            hours_old=48,
+        )
+        for _, row in df.iterrows():
+            title   = _safe(row.get("title"))
+            company = _safe(row.get("company"))
+            jobs.append(Job(
+                id=_safe(row.get("id")) or f"{title}_{company}",
+                title=title,
+                company=company,
+                location=_safe(row.get("location")),
+                link=_safe(row.get("job_url")),
+                description=_safe(row.get("description")),
+                posted=_safe(row.get("date_posted"), "Recently"),
+                salary=_safe(row.get("min_amount")) or None,
+            ))
+    except Exception as e:
+        print(f"[LinkedIn] Error scraping '{keyword}' in {location}: {e}")
+    return jobs
+
 def _fetch_linkedin_jobs() -> list[Job]:
+    """Fetch LinkedIn jobs using parallel processing for multiple keyword+location combinations."""
     all_jobs = []
-    for keyword in SEARCH_KEYWORDS:
-        for location in LOCATIONS:
+    max_workers = min(8, len(SEARCH_KEYWORDS) * len(LOCATIONS))  # Limit concurrent threads
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {}
+        for keyword in SEARCH_KEYWORDS:
+            for location in LOCATIONS:
+                future = executor.submit(_fetch_linkedin_single_search, keyword, location)
+                futures[future] = f"{keyword} in {location}"
+        
+        for future in as_completed(futures):
             try:
-                df = scrape_jobs(
-                    site_name=["linkedin"],
-                    search_term=keyword,
-                    location=location,
-                    results_wanted=20,
-                    hours_old=48,
-                )
-                for _, row in df.iterrows():
-                    title   = _safe(row.get("title"))
-                    company = _safe(row.get("company"))
-                    all_jobs.append(Job(
-                        id=_safe(row.get("id")) or f"{title}_{company}",
-                        title=title,
-                        company=company,
-                        location=_safe(row.get("location")),
-                        link=_safe(row.get("job_url")),
-                        description=_safe(row.get("description")),
-                        posted=_safe(row.get("date_posted"), "Recently"),
-                        salary=_safe(row.get("min_amount")) or None,
-                    ))
+                jobs = future.result()
+                all_jobs.extend(jobs)
             except Exception as e:
-                print(f"[LinkedIn] Error scraping '{keyword}' in {location}: {e}")
+                print(f"[LinkedIn] Error: {e}")
+    
     return all_jobs
 
 def _fetch_wuzzuf_jobs() -> list[Job]:
