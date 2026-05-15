@@ -11,6 +11,8 @@ permissions:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - uses: actions/checkout@v4
@@ -46,9 +48,26 @@ jobs:
             ok=0
             for attempt in 1 2 3 4 5; do
               git fetch origin "${GITHUB_REF_NAME}"
-              if git rebase "origin/${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
-                ok=1
-                break
+              git rebase --abort 2>/dev/null || true
+              git merge --abort 2>/dev/null || true
+
+              if git pull --rebase --no-edit origin "${GITHUB_REF_NAME}"; then
+                if git push origin "${GITHUB_REF_NAME}"; then
+                  ok=1
+                  break
+                fi
+              else
+                if [ -f seen_jobs.json ] && grep -q '<<<<<<<' seen_jobs.json; then
+                  python merge_seen_jobs.py
+                  git add seen_jobs.json
+                  if GIT_EDITOR=true git rebase --continue; then
+                    if git push origin "${GITHUB_REF_NAME}"; then
+                      ok=1
+                      break
+                    fi
+                  fi
+                fi
+                git rebase --abort 2>/dev/null || true
               fi
               sleep "$attempt"
             done

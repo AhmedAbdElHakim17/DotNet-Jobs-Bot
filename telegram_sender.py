@@ -1,13 +1,11 @@
 """
-Send formatted job alerts to Telegram (Markdown).
-
-User-facing strings are escaped so titles containing _ * ` [ do not break parse_mode.
+Telegram notifications — classic (older) template: Job/Post badges, “via” line,
+[Apply Here], and simple hashtags.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from datetime import date, datetime
 
 import requests
@@ -19,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 
 def _escape_markdown(text: str) -> str:
-    """Escape Telegram classic Markdown reserved characters."""
     if not text:
         return ""
     out: list[str] = []
@@ -33,7 +30,7 @@ def _escape_markdown(text: str) -> str:
 
 def _relative_time(posted: str) -> str:
     if not posted or posted in ("Recently", ""):
-        return "Just now / unknown"
+        return "Just now"
     try:
         post_date = datetime.strptime(str(posted)[:10], "%Y-%m-%d").date()
         delta = (date.today() - post_date).days
@@ -46,72 +43,36 @@ def _relative_time(posted: str) -> str:
         return str(posted)[:32]
 
 
-def _source_badge(job: Job) -> str:
+def _badge_via_line(job: Job) -> tuple[str, str]:
+    """
+    Return (Markdown badge line, plain “via” label) matching the legacy bot style.
+    Wuzzuf vs LinkedIn were the originals; other boards follow the same pattern.
+    """
+    link_l = job.link.lower()
     src = job.source.lower().replace(" ", "_")
-    labels = {
-        "linkedin_rss": "🔗 *LinkedIn · RSS*",
-        "indeed": "🟦 *Indeed*",
-        "glassdoor": "🟩 *Glassdoor*",
-        "remotive": "🌍 *Remotive*",
-        "weworkremotely": "🏝 *We Work Remotely*",
-    }
-    return labels.get(src, f"📋 *{_escape_markdown(job.source.replace('_', ' ').title())}*")
+
+    if "wuzzuf.net" in link_l:
+        return "🟠 *Job — Wuzzuf*", "Wuzzuf"
+    if "linkedin.com" in link_l or src == "linkedin_rss":
+        return "🔵 *Job — LinkedIn*", "LinkedIn Jobs"
+    if src == "indeed":
+        return "🟦 *Job — Indeed*", "Indeed"
+    if src == "glassdoor":
+        return "🟩 *Job — Glassdoor*", "Glassdoor"
+    if src == "remotive":
+        return "🌍 *Job — Remotive*", "Remotive"
+    if src == "weworkremotely":
+        return "🏝 *Job — We Work Remotely*", "We Work Remotely"
+
+    label = job.source.replace("_", " ").title()
+    return f"📋 *Job — {_escape_markdown(label)}*", label
 
 
-def _build_hashtags(job: Job) -> str:
-    """Compact hashtag line from geo + matched stack keywords."""
-    tags = ["#DotNetJobs", "#CSharpJobs", "#JobAlert"]
-    bucket = job.geo_bucket()
-    if bucket == "egypt":
-        tags.extend(["#Egypt", "#CairoTech"])
-    elif bucket == "gulf":
-        tags.append("#GulfJobs")
-    elif bucket == "remote":
-        tags.append("#RemoteDeveloper")
-
-    for kw in job.matched_keywords[:4]:
-        slug = re.sub(r"[^A-Za-z0-9]+", "", kw)
-        if len(slug) >= 3 and slug.lower() not in ("net",):
-            tags.append("#" + slug)
-    # de-dupe preserve order
-    seen: set[str] = set()
-    uniq = []
-    for t in tags:
-        tl = t.lower()
-        if tl not in seen:
-            seen.add(tl)
-            uniq.append(t)
-    return " ".join(uniq)
-
-
-def send_job(job: Job) -> None:
-    """Push a single job message to the configured Telegram chat."""
-    time_str = _relative_time(job.posted)
-    title_e = _escape_markdown(job.title)
-    company_e = _escape_markdown(job.company or "—")
-    loc_e = _escape_markdown(job.location or "—")
-
-    lines = [
-        _source_badge(job),
-        "",
-        f"*{title_e}*",
-        f"🏢 {company_e}",
-        f"📍 {loc_e}",
-        f"🕒 {_escape_markdown(time_str)}",
-        "",
-        f"➡️ [Apply / view]({job.link})",
-        "",
-    ]
-    if job.salary:
-        lines.insert(-3, f"💰 {_escape_markdown(job.salary)}")
-
-    lines.append(_build_hashtags(job))
-
-    text = "\n".join(lines)
+def _send(payload_text: str) -> None:
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
+        "text": payload_text,
         "parse_mode": "Markdown",
         "disable_web_page_preview": False,
     }
@@ -125,3 +86,59 @@ def send_job(job: Job) -> None:
             )
     except Exception as e:
         logger.exception("Telegram request error: %s", e)
+
+
+def _send_job_listing(job: Job) -> None:
+    badge, source = _badge_via_line(job)
+    time_str = _relative_time(job.posted)
+    title_e = _escape_markdown(job.title)
+    company_e = _escape_markdown(job.company) if job.company else ""
+    loc_e = _escape_markdown(job.location) if job.location else ""
+
+    parts = [badge, "", f"*{title_e}*"]
+    if job.company:
+        parts.append(f"🏢 {company_e}")
+    if job.location:
+        parts.append(f"📍 {loc_e}")
+    parts.append(f"🕒 {time_str}")
+    if job.salary:
+        parts.append(f"💰 {_escape_markdown(job.salary)}")
+    parts.append(f"📌 via {source}")
+    parts.append("")
+    parts.append(f"➡️ [Apply Here]({job.link})")
+    parts.append("")
+    parts.append("#DotNet #CSharp #Hiring")
+    _send("\n".join(parts))
+
+
+def _send_post(job: Job) -> None:
+    """Legacy layout for social-style postings (e.g. LinkedIn feed)."""
+    time_str = _relative_time(job.posted)
+    preview_raw = job.description[:700].strip() if job.description else job.title
+    if job.description and len(job.description) > 700:
+        preview_raw += "..."
+    preview_e = _escape_markdown(preview_raw)
+
+    parts = [
+        "📢 *Post — LinkedIn*",
+        "",
+        preview_e,
+        "",
+    ]
+    if job.company:
+        parts.append(f"👤 {_escape_markdown(job.company)}")
+    parts.append(f"🕒 {time_str}")
+    parts.append("📌 via LinkedIn Posts")
+    if job.link:
+        parts.append("")
+        parts.append(f"🔗 [View Post]({job.link})")
+    parts.append("")
+    parts.append("#DotNet #CSharp #Hiring")
+    _send("\n".join(parts))
+
+
+def send_job(job: Job) -> None:
+    if job.is_post:
+        _send_post(job)
+    else:
+        _send_job_listing(job)

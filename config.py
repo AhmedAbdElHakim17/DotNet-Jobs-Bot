@@ -49,6 +49,8 @@ EXCLUDE_KEYWORDS: List[str] = [
     "GoLang",
     "Swift",
     "Kotlin",
+    "Shopify",
+    "WordPress",
 ]
 
 # Title-only excludes (word boundaries) — skip obvious leadership layers
@@ -60,6 +62,17 @@ TITLE_EXCLUDE_KEYWORDS: List[str] = [
     "vp ",
     "vice president",
     "chief ",
+]
+
+# Title-only stack / platform excludes (word boundaries in models.py)
+TITLE_PLATFORM_EXCLUDE: List[str] = [
+    "shopify",
+    "wordpress",
+    "ruby on rails",
+    "rails developer",
+    "salesforce",
+    "magento",
+    "drupal",
 ]
 
 # ---------------------------------------------------------------------------
@@ -106,18 +119,23 @@ LOCATIONS: List[str] = [
 
 
 def country_indeed_for_location(location: str) -> str:
-    """Map a human location string to an Indeed country code (JobSpy)."""
+    """
+    Map a human location string to JobSpy's country_indeed value.
+
+    JobSpy expects lowercase full country names (see library error message),
+    not ISO alpha-2 codes (e.g. egypt, not EG).
+    """
     loc = location.lower()
     if any(x in loc for x in ("egypt", "cairo", "giza", "alexandria")):
-        return "EG"
+        return "egypt"
     if any(x in loc for x in ("saudi", "riyadh", "jeddah")):
-        return "SA"
+        return "saudi arabia"
     if any(x in loc for x in ("uae", "dubai", "abu dhabi", "emirates")):
-        return "AE"
+        return "united arab emirates"
     if "qatar" in loc or "doha" in loc:
-        return "QA"
-    # Remote / worldwide — Indeed US index has many remote listings
-    return "USA"
+        return "qatar"
+    # Remote / worldwide — US Indeed index is the usual default for remote rows
+    return "usa"
 
 
 # ---------------------------------------------------------------------------

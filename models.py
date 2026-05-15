@@ -11,12 +11,30 @@ from config import (
     INCLUDE_KEYWORDS,
     SOURCE_PRIORITY,
     TITLE_EXCLUDE_KEYWORDS,
+    TITLE_PLATFORM_EXCLUDE,
 )
 
 
-def _contains_any(text: str, words: List[str]) -> bool:
+def _exclude_keyword_present(text: str) -> bool:
+    """Substring excludes with word boundaries where needed (avoid Java→JavaScript)."""
     t = text.lower()
-    return any(w.lower() in t for w in words)
+    for w in EXCLUDE_KEYWORDS:
+        wl = w.lower()
+        if wl == "java":
+            if re.search(r"\bjava(?!script)\b", t):
+                return True
+            continue
+        if wl == "node.js":
+            if "node.js" in t or re.search(r"\bnode\b", t):
+                return True
+            continue
+        if " " in wl or "." in wl:
+            if wl in t:
+                return True
+            continue
+        if re.search(r"\b" + re.escape(wl) + r"\b", t):
+            return True
+    return False
 
 
 def _title_excluded(title: str) -> bool:
@@ -24,6 +42,14 @@ def _title_excluded(title: str) -> bool:
     for kw in TITLE_EXCLUDE_KEYWORDS:
         if re.search(r"\b" + re.escape(kw.lower()) + r"\b", tl):
             return True
+    for kw in TITLE_PLATFORM_EXCLUDE:
+        if re.search(r"\b" + re.escape(kw.lower()) + r"\b", tl):
+            return True
+    # Non-engineering / founder spam common on general “tech” boards
+    if re.search(r"\bco[- ]?founder\b", tl) or re.search(r"\bcofounder\b", tl):
+        return True
+    if re.search(r"\bfundraising\b", tl):
+        return True
     return False
 
 
@@ -40,6 +66,7 @@ class Job:
     posted: str = ""  # ISO date (YYYY-MM-DD) or humanized fallback
     salary: str | None = None
     source: str = "unknown"  # e.g. linkedin_rss, indeed, remotive
+    is_post: bool = False  # True → older “LinkedIn post” style notification
 
     matched_keywords: List[str] = field(default_factory=list)
 
@@ -55,10 +82,31 @@ class Job:
                 out.append(kw)
         return sorted(set(out), key=len, reverse=True)
 
+    def _noisy_board_has_dotnet_signal(self) -> bool:
+        """Remote job boards often need an explicit stack hint beyond fuzzy keyword matches."""
+        if self.source not in ("weworkremotely", "remotive"):
+            return True
+        blob = f"{self.title} {self.description}".lower()
+        hints = (
+            ".net",
+            "dotnet",
+            "c#",
+            "c-sharp",
+            "asp.net",
+            "aspnet",
+            "ef core",
+            "entity framework",
+            "blazor",
+            "full stack .net",
+        )
+        return any(h in blob for h in hints)
+
     def is_relevant(self) -> bool:
         """Strong .NET filter + light tech exclusions + title gating."""
         text = f"{self.title} {self.company} {self.description} {self.location}".lower()
-        if _contains_any(text, EXCLUDE_KEYWORDS):
+        if not self._noisy_board_has_dotnet_signal():
+            return False
+        if _exclude_keyword_present(text):
             return False
         if _title_excluded(self.title):
             return False
