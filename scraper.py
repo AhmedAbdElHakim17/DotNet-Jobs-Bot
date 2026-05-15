@@ -156,7 +156,16 @@ def _fetch_linkedin_posts() -> list[Job]:
                         author = node.strip()
                         break
 
+                # Build the post URL from navigationUrl or URN fields
                 url = item.get("navigationUrl", "")
+                if not url:
+                    urn = (
+                        item.get("trackingUrn")
+                        or item.get("entityUrn")
+                        or item.get("urn")
+                    )
+                    if urn and urn.startswith("urn:li:"):
+                        url = f"https://www.linkedin.com/feed/update/{urn}/"
                 post_id = url or text[:80]
 
                 if post_id in seen_ids:
