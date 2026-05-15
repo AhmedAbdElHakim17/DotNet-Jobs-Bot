@@ -1,6 +1,7 @@
+import re
 from dataclasses import dataclass
 from typing import List
-from config import INCLUDE_KEYWORDS, EXCLUDE_KEYWORDS
+from config import INCLUDE_KEYWORDS, EXCLUDE_KEYWORDS, TITLE_EXCLUDE_KEYWORDS
 
 @dataclass
 class Job:
@@ -12,10 +13,16 @@ class Job:
     description: str = ""
     posted: str = ""
     salary: str = None
+    is_post: bool = False  # True for LinkedIn social posts, False for job listings
 
     def is_relevant(self) -> bool:
         text = f"{self.title} {self.company} {self.description} {self.location}".lower()
+        # Exclude by technology keywords (checked across full text)
         if any(ex in text for ex in [k.lower() for k in EXCLUDE_KEYWORDS]):
+            return False
+        # Exclude leadership/management roles by title only (word-boundary)
+        title_lower = self.title.lower()
+        if any(re.search(r'\b' + re.escape(kw) + r'\b', title_lower) for kw in TITLE_EXCLUDE_KEYWORDS):
             return False
         return any(kw.lower() in text for kw in INCLUDE_KEYWORDS)
 

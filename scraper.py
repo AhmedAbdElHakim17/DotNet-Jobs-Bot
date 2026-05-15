@@ -1,11 +1,13 @@
+import os
 import re
 import urllib.parse
 import pandas as pd
 import requests as http_requests
+from datetime import date
 from bs4 import BeautifulSoup
 from jobspy import scrape_jobs
 from models import Job
-from config import SEARCH_KEYWORDS, LOCATIONS
+from config import SEARCH_KEYWORDS, LOCATIONS, INCLUDE_KEYWORDS, LINKEDIN_EMAIL, LINKEDIN_PASSWORD
 
 def _safe(val, default=""):
     if val is None or (isinstance(val, float) and pd.isna(val)):
@@ -22,7 +24,7 @@ def _fetch_linkedin_jobs() -> list[Job]:
                     search_term=keyword,
                     location=location,
                     results_wanted=20,
-                    hours_old=6,
+                    hours_old=48,
                 )
                 for _, row in df.iterrows():
                     title   = _safe(row.get("title"))
@@ -96,9 +98,97 @@ def _fetch_wuzzuf_jobs() -> list[Job]:
             ))
     return all_jobs
 
+def _fetch_linkedin_posts() -> list[Job]:
+    """Search LinkedIn social posts for .NET hiring announcements."""
+    if not LINKEDIN_EMAIL or not LINKEDIN_PASSWORD:
+        return []
+    try:
+        from linkedin_api import Linkedin
+    except ImportError:
+        print("[LinkedIn Posts] linkedin-api not installed. Run: pip install linkedin-api")
+        return []
+
+    try:
+        api = Linkedin(LINKEDIN_EMAIL, LINKEDIN_PASSWORD)
+    except Exception as e:
+        print(f"[LinkedIn Posts] Auth failed: {e}")
+        return []
+
+    posts = []
+    seen_ids = set()
+    search_terms = [".NET developer hiring", "C# developer hiring", "ASP.NET hiring"]
+
+    for term in search_terms:
+        try:
+            results = api.search(keywords=term, result_types=["CONTENT"], limit=15)
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+
+                # Extract post text
+                text = ""
+                for path in [
+                    ["commentary", "text", "text"],
+                    ["title", "text"],
+                    ["description", "text"],
+                ]:
+                    node = item
+                    for key in path:
+                        node = node.get(key) if isinstance(node, dict) else None
+                    if isinstance(node, str) and node.strip():
+                        text = node.strip()
+                        break
+
+                if not text:
+                    continue
+
+                # Filter for .NET relevance
+                if not any(kw.lower() in text.lower() for kw in INCLUDE_KEYWORDS):
+                    continue
+
+                # Extract author
+                author = ""
+                for path in [["actor", "name", "text"], ["primarySubtitle", "text"]]:
+                    node = item
+                    for key in path:
+                        node = node.get(key) if isinstance(node, dict) else None
+                    if isinstance(node, str) and node.strip():
+                        author = node.strip()
+                        break
+
+                url = item.get("navigationUrl", "")
+                post_id = url or text[:80]
+
+                if post_id in seen_ids:
+                    continue
+                seen_ids.add(post_id)
+
+                posts.append(Job(
+                    id=post_id,
+                    title=text.split("\n")[0][:120],
+                    company=author,
+                    location="",
+                    link=url,
+                    description=text,
+                    posted="Recently",
+                    is_post=True,
+                ))
+        except Exception as e:
+            print(f"[LinkedIn Posts] Error searching '{term}': {e}")
+
+    return posts
+
+
+def _date_sort_key(job: Job) -> str:
+    """Sort key: YYYY-MM-DD string. 'Recently' (Wuzzuf) treated as today."""
+    posted = job.posted
+    if not posted or posted == "Recently":
+        return date.today().isoformat()
+    return str(posted)[:10]  # handles both date objects and YYYY-MM-DD strings
+
 def fetch_jobs() -> list[Job]:
-    all_jobs = _fetch_linkedin_jobs() + _fetch_wuzzuf_jobs()
-    
+    all_jobs = _fetch_linkedin_jobs() + _fetch_wuzzuf_jobs() + _fetch_linkedin_posts()
+
     # Remove duplicates
     seen = set()
     unique_jobs = []
@@ -107,5 +197,8 @@ def fetch_jobs() -> list[Job]:
         if key not in seen:
             seen.add(key)
             unique_jobs.append(job)
-    
+
+    # Sort by most recent first
+    unique_jobs.sort(key=_date_sort_key, reverse=True)
+
     return unique_jobs
