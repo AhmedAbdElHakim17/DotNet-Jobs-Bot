@@ -1,4 +1,3 @@
-import os
 import re
 import urllib.parse
 import pandas as pd
@@ -7,7 +6,14 @@ from datetime import date
 from bs4 import BeautifulSoup
 from jobspy import scrape_jobs
 from models import Job
-from config import SEARCH_KEYWORDS, LOCATIONS, INCLUDE_KEYWORDS, LINKEDIN_EMAIL, LINKEDIN_PASSWORD
+from config import (
+    SEARCH_KEYWORDS,
+    LOCATIONS,
+    INCLUDE_KEYWORDS,
+    LINKEDIN_EMAIL,
+    LINKEDIN_PASSWORD,
+    LINKEDIN_JOBSPY_RESULTS,
+)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
@@ -27,7 +33,7 @@ def _fetch_linkedin_single_search(keyword: str, location: str) -> list[Job]:
             site_name=["linkedin"],
             search_term=keyword,
             location=location,
-            results_wanted=20,
+            results_wanted=LINKEDIN_JOBSPY_RESULTS,
             hours_old=48,
         )
         for _, row in df.iterrows():
@@ -126,6 +132,10 @@ def _fetch_wuzzuf_jobs() -> list[Job]:
 def _fetch_linkedin_posts() -> list[Job]:
     """Search LinkedIn social posts for .NET hiring announcements."""
     if not LINKEDIN_EMAIL or not LINKEDIN_PASSWORD:
+        print(
+            "[LinkedIn Posts] Skipping: LINKEDIN_EMAIL / LINKEDIN_PASSWORD not set. "
+            "Add both as repo secrets (or in .env locally) to enable post search."
+        )
         return []
     try:
         from linkedin_api import Linkedin

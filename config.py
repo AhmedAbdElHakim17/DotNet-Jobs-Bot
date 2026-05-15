@@ -23,6 +23,13 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")   # Group or Channel ID
 SEARCH_KEYWORDS = [".NET Developer", "C# Developer", "ASP.NET", "Full Stack .NET"]
 LOCATIONS = ["Egypt", "Remote", "UAE", "Dubai", "Saudi Arabia", "Riyadh", "Qatar"]
 
+# In CI, set BOT_CI_FAST=1 (default in workflow) to cut JobSpy combinations + page size for faster runs (~3 min).
+if os.getenv("BOT_CI_FAST") == "1":
+    SEARCH_KEYWORDS = SEARCH_KEYWORDS[:2]
+    LOCATIONS = LOCATIONS[:3]
+
+LINKEDIN_JOBSPY_RESULTS = 10 if os.getenv("BOT_CI_FAST") == "1" else 20
+
 # LinkedIn Credentials (for post scraping)
 LINKEDIN_EMAIL = os.getenv("LINKEDIN_EMAIL", "")
 LINKEDIN_PASSWORD = os.getenv("LINKEDIN_PASSWORD", "")
