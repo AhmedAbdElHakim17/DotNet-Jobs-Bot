@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import List
+from config import INCLUDE_KEYWORDS, EXCLUDE_KEYWORDS
 
 @dataclass
 class Job:
