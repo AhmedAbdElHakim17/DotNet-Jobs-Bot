@@ -2,10 +2,11 @@
 Scrapers and aggregators for job boards and RSS feeds.
 
 Priority (for alerting order):
-  1. LinkedIn — RSS feeds only (no login; configure LINKEDIN_RSS_URLS).
-  2. Indeed & Glassdoor — python-jobspy.
-  3. Remotive — public JSON API.
-  4. We Work Remotely — category RSS.
+  1. LinkedIn feed posts (optional login — LINKEDIN_EMAIL / LINKEDIN_PASSWORD).
+  2. Wuzzuf (Egypt-focused HTML).
+  3. LinkedIn job RSS (LINKEDIN_RSS_URLS).
+  4. Indeed & Glassdoor (JobSpy) — Egypt + Gulf locations by default.
+  5. Remotive + We Work Remotely — only if ENABLE_REMOTE_BOARDS=1.
 
 All functions are defensive: log and continue on per-source failures.
 """
@@ -14,7 +15,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from email.utils import parsedate_to_datetime
@@ -24,14 +27,19 @@ from typing import Any
 import feedparser
 import pandas as pd
 import requests
+from bs4 import BeautifulSoup
 from jobspy import scrape_jobs
 
 from config import (
     DEFAULT_REQUEST_HEADERS,
+    ENABLE_REMOTE_BOARDS,
     HTTP_TIMEOUT_SEC,
+    INCLUDE_KEYWORDS,
     JOBSPY_HOURS_OLD,
     JOBSPY_MAX_WORKERS,
     JOBSPY_RESULTS,
+    LINKEDIN_EMAIL,
+    LINKEDIN_PASSWORD,
     LINKEDIN_RSS_URLS,
     LOCATIONS,
     REMOTIVE_API_URL,
@@ -40,6 +48,7 @@ from config import (
     RSS_DELAY_SEC,
     SEARCH_KEYWORDS,
     WEWORKREMOTELY_RSS_URL,
+    WUZZUF_DELAY_SEC,
     country_indeed_for_location,
 )
 from models import Job
@@ -149,8 +158,188 @@ def _jobs_from_feed_body(
     return jobs
 
 
+def fetch_wuzzuf_jobs() -> list[Job]:
+    """Wuzzuf job search (Egypt-heavy market)."""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    all_jobs: list[Job] = []
+    seen_links: set[str] = set()
+    for keyword in SEARCH_KEYWORDS:
+        query = urllib.parse.quote_plus(keyword)
+        url = f"https://wuzzuf.net/search/jobs/?q={query}&a=hpb"
+        try:
+            resp = requests.get(url, headers=headers, timeout=HTTP_TIMEOUT_SEC)
+            resp.raise_for_status()
+        except Exception as e:
+            logger.warning("[Wuzzuf] Request failed for %r: %s", keyword, e)
+            continue
+
+        soup = BeautifulSoup(resp.text, "lxml")
+        for a_tag in soup.find_all("a", href=re.compile(r"^/jobs/p/")):
+            link = "https://wuzzuf.net" + a_tag["href"].split("?")[0]
+            if link in seen_links:
+                continue
+            seen_links.add(link)
+
+            title = a_tag.get_text(strip=True)
+            if not title:
+                continue
+
+            company, location = "", ""
+            card = a_tag.find_parent("div")
+            if card:
+                company_tag = card.find("a", href=re.compile(r"/company/"))
+                if company_tag:
+                    company = company_tag.get_text(strip=True)
+                for span in card.find_all("span"):
+                    text = span.get_text(strip=True)
+                    if any(
+                        c in text
+                        for c in (
+                            "Cairo",
+                            "Egypt",
+                            "Giza",
+                            "Alexandria",
+                            "Remote",
+                            "Hybrid",
+                            "Dubai",
+                            "Riyadh",
+                        )
+                    ):
+                        location = text
+                        break
+
+            all_jobs.append(
+                Job(
+                    id=link,
+                    title=title,
+                    company=company,
+                    location=location or "Egypt",
+                    link=link,
+                    description="",
+                    posted="Recently",
+                    salary=None,
+                    source="wuzzuf",
+                )
+            )
+        time.sleep(WUZZUF_DELAY_SEC)
+
+    logger.info("Wuzzuf: collected %d listings (pre-dedup)", len(all_jobs))
+    return all_jobs
+
+
+def fetch_linkedin_posts() -> list[Job]:
+    """
+    LinkedIn social posts mentioning hiring (.NET / C#).
+    Requires linkedin-api; LinkedIn often blocks automated login (use sparingly).
+    """
+    if not LINKEDIN_EMAIL or not LINKEDIN_PASSWORD:
+        logger.info(
+            "[LinkedIn Posts] Skipping — set LINKEDIN_EMAIL / LINKEDIN_PASSWORD for post search."
+        )
+        return []
+    try:
+        from linkedin_api import Linkedin
+    except ImportError:
+        logger.warning("[LinkedIn Posts] Install linkedin-api (see requirements.txt).")
+        return []
+
+    try:
+        api = Linkedin(LINKEDIN_EMAIL, LINKEDIN_PASSWORD)
+    except Exception as e:
+        logger.warning("[LinkedIn Posts] Auth failed (checkpoint / 2FA / block): %s", e)
+        return []
+
+    posts: list[Job] = []
+    seen_ids: set[str] = set()
+    search_terms = [
+        ".NET developer hiring",
+        "C# developer hiring",
+        "ASP.NET hiring Egypt",
+        "dotnet developer Gulf",
+        "مطلوب مطور دوت نت",
+    ]
+
+    for term in search_terms:
+        try:
+            results = api.search(keywords=term, result_types=["CONTENT"], limit=10)
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+
+                text = ""
+                for path in (
+                    ["commentary", "text", "text"],
+                    ["title", "text"],
+                    ["description", "text"],
+                ):
+                    node: object = item
+                    for key in path:
+                        node = node.get(key) if isinstance(node, dict) else None
+                    if isinstance(node, str) and node.strip():
+                        text = node.strip()
+                        break
+
+                if not text:
+                    continue
+
+                if not any(kw.lower() in text.lower() for kw in INCLUDE_KEYWORDS):
+                    continue
+
+                author = ""
+                for path in (["actor", "name", "text"], ["primarySubtitle", "text"]):
+                    node: object = item
+                    for key in path:
+                        node = node.get(key) if isinstance(node, dict) else None
+                    if isinstance(node, str) and node.strip():
+                        author = node.strip()
+                        break
+
+                url = item.get("navigationUrl", "") or ""
+                if not url:
+                    urn = (
+                        item.get("trackingUrn")
+                        or item.get("entityUrn")
+                        or item.get("urn")
+                    )
+                    if isinstance(urn, str) and urn.startswith("urn:li:"):
+                        url = f"https://www.linkedin.com/feed/update/{urn}/"
+                post_id = url or text[:80]
+
+                if post_id in seen_ids:
+                    continue
+                seen_ids.add(post_id)
+
+                posts.append(
+                    Job(
+                        id=post_id,
+                        title=text.split("\n")[0][:120],
+                        company=author,
+                        location="",
+                        link=str(url),
+                        description=text,
+                        posted="Recently",
+                        salary=None,
+                        source="linkedin_post",
+                        is_post=True,
+                    )
+                )
+        except Exception as e:
+            logger.warning("[LinkedIn Posts] Search %r failed: %s", term, e)
+
+        time.sleep(2.0)
+
+    logger.info("LinkedIn posts: collected %d items (pre-dedup)", len(posts))
+    return posts
+
+
 def fetch_linkedin_rss_jobs() -> list[Job]:
-    """Highest-priority source: LinkedIn job search exposed as RSS (third-party or public feed)."""
+    """LinkedIn job listings via RSS (rss.app / third-party feeds)."""
     if not LINKEDIN_RSS_URLS:
         logger.info(
             "LinkedIn RSS: no LINKEDIN_RSS_URLS configured — see README for rss.app setup."
@@ -168,7 +357,7 @@ def fetch_linkedin_rss_jobs() -> list[Job]:
 
 
 def fetch_weworkremotely_rss_jobs() -> list[Job]:
-    if not WEWORKREMOTELY_RSS_URL:
+    if not ENABLE_REMOTE_BOARDS or not WEWORKREMOTELY_RSS_URL:
         return []
     raw = _fetch_rss_bytes(WEWORKREMOTELY_RSS_URL)
     if raw is None:
@@ -178,6 +367,8 @@ def fetch_weworkremotely_rss_jobs() -> list[Job]:
 
 def fetch_remotive_api_jobs() -> list[Job]:
     """Public API, multiple search terms; dedupe by application URL."""
+    if not ENABLE_REMOTE_BOARDS:
+        return []
     jobs_by_link: dict[str, Job] = {}
     terms = REMOTIVE_SEARCH_TERMS or [".net"]
 
@@ -321,10 +512,13 @@ def fetch_jobs() -> list[Job]:
     source priority → geo (Egypt first) → newest first.
     """
     combined: list[Job] = []
+    combined.extend(fetch_linkedin_posts())
+    combined.extend(fetch_wuzzuf_jobs())
     combined.extend(fetch_linkedin_rss_jobs())
     combined.extend(fetch_jobspy_jobs())
-    combined.extend(fetch_remotive_api_jobs())
-    combined.extend(fetch_weworkremotely_rss_jobs())
+    if ENABLE_REMOTE_BOARDS:
+        combined.extend(fetch_remotive_api_jobs())
+        combined.extend(fetch_weworkremotely_rss_jobs())
 
     seen_keys: set[str] = set()
     unique: list[Job] = []

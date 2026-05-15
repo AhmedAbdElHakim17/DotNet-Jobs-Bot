@@ -35,6 +35,10 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           LINKEDIN_RSS_URLS: ${{ secrets.LINKEDIN_RSS_URLS }}
+          LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
+          LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
+          ENABLE_REMOTE_BOARDS: "0"
+          STRICT_REGION_FILTER: "1"
           BOT_CI_FAST: "1"
         run: python main.py
 
@@ -45,31 +49,5 @@ jobs:
           git add seen_jobs.json
           if ! git diff --staged --quiet; then
             git commit -m "chore: update seen_jobs [skip ci]"
-            ok=0
-            for attempt in 1 2 3 4 5; do
-              git fetch origin "${GITHUB_REF_NAME}"
-              git rebase --abort 2>/dev/null || true
-              git merge --abort 2>/dev/null || true
-
-              if git pull --rebase --no-edit origin "${GITHUB_REF_NAME}"; then
-                if git push origin "${GITHUB_REF_NAME}"; then
-                  ok=1
-                  break
-                fi
-              else
-                if [ -f seen_jobs.json ] && grep -q '<<<<<<<' seen_jobs.json; then
-                  python merge_seen_jobs.py
-                  git add seen_jobs.json
-                  if GIT_EDITOR=true git rebase --continue; then
-                    if git push origin "${GITHUB_REF_NAME}"; then
-                      ok=1
-                      break
-                    fi
-                  fi
-                fi
-                git rebase --abort 2>/dev/null || true
-              fi
-              sleep "$attempt"
-            done
-            test "$ok" -eq 1
+            python push_seen_jobs.py
           fi

@@ -93,9 +93,13 @@ def _parse_rss_urls(raw: str | None) -> List[str]:
 
 LINKEDIN_RSS_URLS: List[str] = _parse_rss_urls(os.getenv("LINKEDIN_RSS_URLS", ""))
 
+# LinkedIn feed posts (optional — unofficial API; often blocked without 2FA app password)
+LINKEDIN_EMAIL = os.getenv("LINKEDIN_EMAIL", "")
+LINKEDIN_PASSWORD = os.getenv("LINKEDIN_PASSWORD", "")
+
 # ---------------------------------------------------------------------------
-# JobSpy (Indeed + Glassdoor) — locations &Indeed country hint
-# Geo priority: Egypt metros, Gulf, remote-friendly strings
+# JobSpy (Indeed + Glassdoor) — Egypt + Gulf by default (no broad “Worldwide” noise)
+# Set JOBSPY_INCLUDE_REMOTE=1 to add Remote + Worldwide rows back.
 # ---------------------------------------------------------------------------
 SEARCH_KEYWORDS: List[str] = [
     ".NET Developer",
@@ -113,9 +117,12 @@ LOCATIONS: List[str] = [
     "Abu Dhabi, United Arab Emirates",
     "Riyadh, Saudi Arabia",
     "Doha, Qatar",
-    "Remote",
-    "Worldwide",
+    "Kuwait City, Kuwait",
+    "Manama, Bahrain",
 ]
+
+if os.getenv("JOBSPY_INCLUDE_REMOTE", "0") == "1":
+    LOCATIONS.extend(["Remote", "Worldwide"])
 
 
 def country_indeed_for_location(location: str) -> str:
@@ -134,7 +141,11 @@ def country_indeed_for_location(location: str) -> str:
         return "united arab emirates"
     if "qatar" in loc or "doha" in loc:
         return "qatar"
-    # Remote / worldwide — US Indeed index is the usual default for remote rows
+    if "kuwait" in loc:
+        return "kuwait"
+    if "bahrain" in loc or "manama" in loc:
+        return "bahrain"
+    # Remote-only strings (when JOBSPY_INCLUDE_REMOTE=1)
     return "usa"
 
 
@@ -171,7 +182,7 @@ JOBSPY_MAX_WORKERS = int(os.getenv("JOBSPY_MAX_WORKERS", "4"))
 # ---------------------------------------------------------------------------
 if os.getenv("BOT_CI_FAST") == "1":
     SEARCH_KEYWORDS = SEARCH_KEYWORDS[:2]
-    LOCATIONS = LOCATIONS[:4]
+    LOCATIONS = LOCATIONS[:5]
     JOBSPY_RESULTS = min(JOBSPY_RESULTS, 12)
     REMOTIVE_SEARCH_TERMS = REMOTIVE_SEARCH_TERMS[:1]
 
@@ -179,13 +190,15 @@ if os.getenv("BOT_CI_FAST") == "1":
 # Source ordering for Telegram (lower = notified first)
 # ---------------------------------------------------------------------------
 SOURCE_PRIORITY: dict[str, int] = {
-    "linkedin_rss": 0,
-    "indeed": 1,
-    "glassdoor": 1,
-    "zip_recruiter": 2,
-    "google": 2,
-    "remotive": 3,
-    "weworkremotely": 4,
+    "linkedin_post": 0,  # feed posts — highest trust / earliest signal
+    "linkedin_rss": 1,
+    "wuzzuf": 2,
+    "indeed": 3,
+    "glassdoor": 3,
+    "zip_recruiter": 4,
+    "google": 4,
+    "remotive": 5,
+    "weworkremotely": 6,
 }
 
 DEFAULT_REQUEST_HEADERS = {
@@ -195,3 +208,12 @@ DEFAULT_REQUEST_HEADERS = {
     ),
     "Accept": "application/rss+xml, application/xml, application/json, */*;q=0.8",
 }
+
+# Remotive + We Work Remotely add noise; enable only if you want global remote boards.
+ENABLE_REMOTE_BOARDS = os.getenv("ENABLE_REMOTE_BOARDS", "0") == "1"
+
+# Telegram: only Egypt/Gulf rows unless from trusted sources (posts, Wuzzuf) — see main.py
+STRICT_REGION_FILTER = os.getenv("STRICT_REGION_FILTER", "1") == "1"
+
+# Delay between Wuzzuf keyword hits (be polite to their HTML)
+WUZZUF_DELAY_SEC = float(os.getenv("WUZZUF_DELAY_SEC", "1.5"))

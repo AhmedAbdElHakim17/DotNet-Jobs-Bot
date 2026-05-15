@@ -2,15 +2,13 @@
 """
 Resolve git merge/rebase conflicts inside seen_jobs.json.
 
-Expects standard conflict markers (<<<<<<<, =======, >>>>>>>) in the file,
-or valid JSON (no-op rewrite normalized). Output is a single merged object
-with the latest ISO timestamp kept per key.
+Handles standard <<<<<<< / ======= / >>>>>>> markers with a line-based split
+(pretty-printed JSON is fine). No markers => valid JSON rewritten normalized.
 """
 
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -34,19 +32,30 @@ def _merge_dicts(a: dict[str, str], b: dict[str, str]) -> dict[str, str]:
 
 
 def _from_conflict(text: str) -> dict[str, str]:
+    text = text.replace("\r\n", "\n")
     if "<<<<<<<" not in text:
         return _as_dict(json.loads(text))
 
-    m = re.search(
-        r"^<<<<<<<[^\n]*\n(.*?)^=======\n(.*?)^>>>>>>>[^\n]*\n?",
-        text,
-        re.S | re.M,
-    )
-    if not m:
-        print("Could not parse conflict markers; aborting.", file=sys.stderr)
+    # Drop first line (<<<<<<< label)
+    after_first = text.split("<<<<<<<", 1)[1]
+    if "\n" in after_first:
+        after_first = after_first.split("\n", 1)[1]
+    else:
+        print("Malformed conflict (no body after <<<<<<<)", file=sys.stderr)
         sys.exit(1)
-    left = _as_dict(json.loads(m.group(1).strip()))
-    right = _as_dict(json.loads(m.group(2).strip()))
+
+    if "\n=======\n" not in after_first:
+        print("Malformed conflict (no =======)", file=sys.stderr)
+        sys.exit(1)
+    left_s, right_rest = after_first.split("\n=======\n", 1)
+
+    if "\n>>>>>>>" not in right_rest:
+        print("Malformed conflict (no >>>>>>>)", file=sys.stderr)
+        sys.exit(1)
+    right_s = right_rest.split("\n>>>>>>>", 1)[0]
+
+    left = _as_dict(json.loads(left_s.strip()))
+    right = _as_dict(json.loads(right_s.strip()))
     return _merge_dicts(left, right)
 
 
