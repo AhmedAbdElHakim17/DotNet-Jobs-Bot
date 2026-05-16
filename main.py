@@ -1,7 +1,12 @@
-"""
-DotNet-Jobs-Bot — aggregate .NET/C# jobs and notify Telegram.
+﻿"""
+DotNet-Jobs-Bot — entry point.
 
-Entry point for local runs and GitHub Actions.
+Run order:
+  1. Load seen job keys from seen_jobs.json
+  2. Fetch all sources (LinkedIn Posts RSS > LinkedIn Jobs RSS > Wuzzuf > JobSpy)
+  3. Filter by .NET relevance and skip already-seen entries
+  4. Send each new job/post to Telegram (newest first)
+  5. Persist updated seen keys back to seen_jobs.json
 """
 
 from __future__ import annotations
@@ -9,67 +14,56 @@ from __future__ import annotations
 import logging
 import sys
 
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, STRICT_REGION_FILTER
 from dedup import load_seen, save_seen
-from models import Job
 from scraper import fetch_jobs
 from telegram_sender import send_job
 
-logger = logging.getLogger(__name__)
 
-
-def _notify_region_ok(job: Job) -> bool:
-    """
-    When STRICT_REGION_FILTER is on, Telegram only gets:
-    - Egypt / Gulf rows, or
-    - Trusted local sources: Wuzzuf, LinkedIn posts.
-    Everything else (generic remote boards, foreign Indeed, etc.) is skipped for alerts.
-    """
-    if not STRICT_REGION_FILTER:
-        return True
-    if job.is_post or job.source == "linkedin_post":
-        return True
-    if job.source == "linkedin_rss":
-        return True  # you curate the RSS URL (Egypt/Gulf searches)
-    if "wuzzuf.net" in job.link.lower():
-        return True
-    return job.geo_bucket() in ("egypt", "gulf")
-
-
-def main() -> None:
+def _setup_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        stream=sys.stdout,
     )
 
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        logger.error(
-            "Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID — set env vars or .env file."
-        )
-        sys.exit(1)
 
-    logger.info("Starting DotNet-Jobs-Bot run")
+def main() -> None:
+    _setup_logging()
+    logger = logging.getLogger(__name__)
+
+    logger.info("=== DotNet-Jobs-Bot starting ===")
+
     seen = load_seen()
     jobs = fetch_jobs()
 
-    new_count = 0
+    new_posts = 0
+    new_listings = 0
+
     for job in jobs:
+        if not job.is_relevant():
+            continue
+
         key = f"{job.id}_{job.link}"
         if key in seen:
             continue
-        if not job.is_relevant():
-            continue
-        if not _notify_region_ok(job):
-            # Still persist so we do not re-fetch / re-check every 10 minutes.
-            seen.add(key)
-            continue
+
         send_job(job)
         seen.add(key)
-        new_count += 1
-        logger.info("Sent: %s | %s", job.source, job.title[:80])
+
+        if job.is_post:
+            new_posts += 1
+            logger.info("[POST]    %s (score=%d)", job.title[:80], job.hiring_score())
+        else:
+            new_listings += 1
+            logger.info("[LISTING] %s @ %s", job.title[:60], job.company[:40])
 
     save_seen(seen)
-    logger.info("Finished — sent %s new relevant job(s).", new_count)
+
+    logger.info(
+        "=== Done: %d new posts, %d new listings (total sent: %d) ===",
+        new_posts, new_listings, new_posts + new_listings,
+    )
 
 
 if __name__ == "__main__":

@@ -1,105 +1,121 @@
-"""
+﻿"""
 Central configuration for DotNet-Jobs-Bot.
 
-Loads environment variables via python-dotenv for local runs; GitHub Actions
-injects secrets as env vars directly.
+Source priority (fastest hiring signal first):
+  1. LinkedIn Posts RSS  -- rss.app feeds watching LinkedIn feed posts (.NET hiring)
+  2. LinkedIn Jobs RSS   -- rss.app feeds watching LinkedIn Jobs tab results
+  3. Wuzzuf              -- Egypt-focused job board (HTML scrape)
+  4. LinkedIn JobSpy     -- python-jobspy LinkedIn scrape (fallback)
+
+All secrets loaded via python-dotenv locally; GitHub Actions injects them directly.
 """
 
 from __future__ import annotations
 
 import os
-from typing import List
+from typing import Dict, List
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
+
 # ---------------------------------------------------------------------------
-# Filtering — target: .NET Full Stack / Backend (roughly 0–5 YOE)
-# Must match at least one INCLUDE keyword in title/company/description/location.
+# .NET keyword filtering
+# A post or listing must match at least one INCLUDE_KEYWORD to be forwarded.
 # ---------------------------------------------------------------------------
 INCLUDE_KEYWORDS: List[str] = [
-    ".NET",
-    "C#",
-    "ASP.NET",
-    "ASP.NET Core",
-    "EF Core",
-    "Entity Framework",
-    "Microservices",
-    "RabbitMQ",
-    "Clean Architecture",
-    "Full Stack .NET",
-    "Blazor",
-    "Hangfire",
-    # Extra strong .NET signals (optional but helpful)
-    "MediatR",
-    "CQRS",
-    "Dapper",
-    "SignalR",
-    "Backend .NET",
+    ".NET", "C#", "ASP.NET", "ASP.NET Core", "EF Core", "Entity Framework",
+    "Microservices", "RabbitMQ", "Clean Architecture", "Full Stack .NET",
+    "Blazor", "Hangfire", "MediatR", "CQRS", "Dapper", "SignalR", "Backend .NET",
 ]
 
 EXCLUDE_KEYWORDS: List[str] = [
-    "Java",
-    "Python",
-    "PHP",
-    "Node.js",
-    "React Native",
-    "Flutter",
-    "GoLang",
-    "Swift",
-    "Kotlin",
-    "Shopify",
-    "WordPress",
+    "Java", "Python", "PHP", "Node.js", "React Native", "Flutter",
+    "GoLang", "Swift", "Kotlin", "Shopify", "WordPress",
 ]
 
-# Title-only excludes (word boundaries) — skip obvious leadership layers
+# Checked against job/post title only (word boundaries)
 TITLE_EXCLUDE_KEYWORDS: List[str] = [
-    "lead",
-    "manager",
-    "director",
-    "head of",
-    "vp ",
-    "vice president",
-    "chief ",
+    "lead", "manager", "director", "head of", "vp ", "vice president", "chief ",
 ]
 
-# Title-only stack / platform excludes (word boundaries in models.py)
 TITLE_PLATFORM_EXCLUDE: List[str] = [
-    "shopify",
-    "wordpress",
-    "ruby on rails",
-    "rails developer",
-    "salesforce",
-    "magento",
-    "drupal",
+    "shopify", "wordpress", "ruby on rails", "rails developer",
+    "salesforce", "magento", "drupal",
+]
+
+# ---------------------------------------------------------------------------
+# Hiring-intent signals
+# Posts containing at least one of these are treated as active hiring announcements
+# and given top priority. Higher match count = higher urgency score.
+# ---------------------------------------------------------------------------
+HIRING_SIGNALS: List[str] = [
+    # English
+    "hiring", "we're hiring", "we are hiring", "now hiring",
+    "open position", "open role", "open vacancy",
+    "join our team", "join us",
+    "looking for", "seeking a", "seeking an",
+    "vacancy", "vacancies",
+    "new opportunity", "exciting opportunity",
+    "apply now", "apply today", "applications open",
+    "immediate opening", "urgent hiring",
+    # Arabic
+    "matlub", "metah", "forsa amal",
 ]
 
 # ---------------------------------------------------------------------------
 # Telegram
 # ---------------------------------------------------------------------------
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
+
 
 # ---------------------------------------------------------------------------
-# LinkedIn — RSS only (rss.app, FetchRSS, or LinkedIn public job search RSS)
-# Comma-separated list of feed URLs in env: LINKEDIN_RSS_URLS
+# LinkedIn Posts RSS  <-- PRIMARY SOURCE
+#
+# rss.app feeds that watch LinkedIn content/feed search results for
+# .NET / C# hiring posts (regular posts by recruiters, not the Jobs tab).
+#
+# How to generate:
+#   1. Search LinkedIn for:  ".NET developer hiring"  or  #dotnet #hiring
+#      URL: https://www.linkedin.com/search/results/content/?keywords=.NET+developer+hiring
+#   2. Paste that URL at https://rss.app -> New Feed -> Generate
+#   3. Copy the feed URL (e.g. https://rss.app/feeds/XXXXXXXXXXXXXXXX.xml)
+#   4. Set: LINKEDIN_POSTS_RSS_URLS=<url>   (comma-separate multiple feeds)
 # ---------------------------------------------------------------------------
-def _parse_rss_urls(raw: str | None) -> List[str]:
+def _parse_urls(raw: str | None) -> List[str]:
     if not raw or not raw.strip():
         return []
     return [u.strip() for u in raw.split(",") if u.strip()]
 
 
-LINKEDIN_RSS_URLS: List[str] = _parse_rss_urls(os.getenv("LINKEDIN_RSS_URLS", ""))
-
-# LinkedIn feed posts (optional — unofficial API; often blocked without 2FA app password)
-LINKEDIN_EMAIL = os.getenv("LINKEDIN_EMAIL", "")
-LINKEDIN_PASSWORD = os.getenv("LINKEDIN_PASSWORD", "")
+LINKEDIN_POSTS_RSS_URLS: List[str] = _parse_urls(os.getenv("LINKEDIN_POSTS_RSS_URLS", ""))
 
 # ---------------------------------------------------------------------------
-# JobSpy (Indeed + Glassdoor) — Egypt + Gulf by default (no broad “Worldwide” noise)
-# Set JOBSPY_INCLUDE_REMOTE=1 to add Remote + Worldwide rows back.
+# LinkedIn Jobs RSS  <-- SECONDARY SOURCE
+#
+# rss.app feeds watching the LinkedIn Jobs tab for .NET listings.
+#
+# How to generate:
+#   1. Search LinkedIn Jobs:  .NET Developer  Egypt  (or any keyword/location)
+#      URL: https://www.linkedin.com/jobs/search/?keywords=.NET+Developer&location=Egypt
+#   2. Paste that URL at https://rss.app -> New Feed -> Generate
+#   3. Set: LINKEDIN_JOBS_RSS_URLS=<url>
+# ---------------------------------------------------------------------------
+LINKEDIN_JOBS_RSS_URLS: List[str] = _parse_urls(os.getenv("LINKEDIN_JOBS_RSS_URLS", ""))
+
+# ---------------------------------------------------------------------------
+# LinkedIn unofficial API  (optional -- frequently blocked by LinkedIn)
+# Prefer LINKEDIN_COOKIE (li_at session cookie) over email/password.
+#   Get it: linkedin.com -> DevTools (F12) -> Application -> Cookies -> li_at
+# ---------------------------------------------------------------------------
+LINKEDIN_EMAIL: str = os.getenv("LINKEDIN_EMAIL", "")
+LINKEDIN_PASSWORD: str = os.getenv("LINKEDIN_PASSWORD", "")
+LINKEDIN_COOKIE: str = os.getenv("LINKEDIN_COOKIE", "")
+
+# ---------------------------------------------------------------------------
+# JobSpy  <-- FALLBACK (LinkedIn scrape via python-jobspy)
 # ---------------------------------------------------------------------------
 SEARCH_KEYWORDS: List[str] = [
     ".NET Developer",
@@ -118,102 +134,40 @@ LOCATIONS: List[str] = [
     "Riyadh, Saudi Arabia",
     "Doha, Qatar",
     "Kuwait City, Kuwait",
-    "Manama, Bahrain",
 ]
 
-if os.getenv("JOBSPY_INCLUDE_REMOTE", "0") == "1":
-    LOCATIONS.extend(["Remote", "Worldwide"])
-
-
-def country_indeed_for_location(location: str) -> str:
-    """
-    Map a human location string to JobSpy's country_indeed value.
-
-    JobSpy expects lowercase full country names (see library error message),
-    not ISO alpha-2 codes (e.g. egypt, not EG).
-    """
-    loc = location.lower()
-    if any(x in loc for x in ("egypt", "cairo", "giza", "alexandria")):
-        return "egypt"
-    if any(x in loc for x in ("saudi", "riyadh", "jeddah")):
-        return "saudi arabia"
-    if any(x in loc for x in ("uae", "dubai", "abu dhabi", "emirates")):
-        return "united arab emirates"
-    if "qatar" in loc or "doha" in loc:
-        return "qatar"
-    if "kuwait" in loc:
-        return "kuwait"
-    if "bahrain" in loc or "manama" in loc:
-        return "bahrain"
-    # Remote-only strings (when JOBSPY_INCLUDE_REMOTE=1)
-    return "usa"
-
+# ---------------------------------------------------------------------------
+# Timeouts, delays, batch sizes
+# ---------------------------------------------------------------------------
+HTTP_TIMEOUT_SEC: int = 25
+RSS_DELAY_SEC: float = float(os.getenv("RSS_DELAY_SEC", "1.0"))
+WUZZUF_DELAY_SEC: float = float(os.getenv("WUZZUF_DELAY_SEC", "1.5"))
+JOBSPY_HOURS_OLD: int = int(os.getenv("JOBSPY_HOURS_OLD", "24"))
+JOBSPY_RESULTS: int = int(os.getenv("JOBSPY_RESULTS", "25"))
+JOBSPY_MAX_WORKERS: int = int(os.getenv("JOBSPY_MAX_WORKERS", "4"))
 
 # ---------------------------------------------------------------------------
-# We Work Remotely — default programming / full-stack category RSS
+# Source priority -- lower value = sent to Telegram first
 # ---------------------------------------------------------------------------
-WEWORKREMOTELY_RSS_URL = os.getenv(
-    "WEWORKREMOTELY_RSS_URL",
-    "https://weworkremotely.com/categories/remote-full-stack-programming-jobs.rss",
-)
+SOURCE_PRIORITY: Dict[str, int] = {
+    "linkedin_post_rss": 0,   # LinkedIn feed posts via RSS  <- fastest hiring signal
+    "linkedin_jobs_rss": 1,   # LinkedIn job listings via RSS
+    "wuzzuf": 2,              # Wuzzuf Egypt board
+    "linkedin_jobspy": 3,     # JobSpy LinkedIn fallback
+}
+
+DEFAULT_REQUEST_HEADERS: Dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (compatible; DotNet-Jobs-Bot/2.0; "
+        "+https://github.com/DotNet-Jobs-Bot; job alerts for .NET developers)"
+    ),
+    "Accept": "application/rss+xml, application/xml, */*;q=0.8",
+}
 
 # ---------------------------------------------------------------------------
-# Remotive — free JSON API (no key)
-# ---------------------------------------------------------------------------
-REMOTIVE_API_URL = "https://remotive.com/api/remote-jobs"
-REMOTIVE_SEARCH_TERMS: List[str] = [
-    t.strip()
-    for t in os.getenv("REMOTIVE_SEARCH", ".net,c#").split(",")
-    if t.strip()
-]
-REMOTIVE_QUERY_DELAY_SEC = float(os.getenv("REMOTIVE_QUERY_DELAY_SEC", "0.5"))
-
-# ---------------------------------------------------------------------------
-# Rate limits & batch sizes
-# ---------------------------------------------------------------------------
-HTTP_TIMEOUT_SEC = 25
-RSS_DELAY_SEC = float(os.getenv("RSS_DELAY_SEC", "1.2"))
-JOBSPY_HOURS_OLD = int(os.getenv("JOBSPY_HOURS_OLD", "72"))
-JOBSPY_RESULTS = int(os.getenv("JOBSPY_RESULTS", "25"))
-JOBSPY_MAX_WORKERS = int(os.getenv("JOBSPY_MAX_WORKERS", "4"))
-
-# ---------------------------------------------------------------------------
-# CI fast mode (GitHub Actions) — fewer JobSpy combos
+# CI fast mode -- reduce JobSpy load in GitHub Actions
 # ---------------------------------------------------------------------------
 if os.getenv("BOT_CI_FAST") == "1":
     SEARCH_KEYWORDS = SEARCH_KEYWORDS[:2]
-    LOCATIONS = LOCATIONS[:5]
-    JOBSPY_RESULTS = min(JOBSPY_RESULTS, 12)
-    REMOTIVE_SEARCH_TERMS = REMOTIVE_SEARCH_TERMS[:1]
-
-# ---------------------------------------------------------------------------
-# Source ordering for Telegram (lower = notified first)
-# ---------------------------------------------------------------------------
-SOURCE_PRIORITY: dict[str, int] = {
-    "linkedin_post": 0,  # feed posts — highest trust / earliest signal
-    "linkedin_rss": 1,
-    "wuzzuf": 2,
-    "indeed": 3,
-    "glassdoor": 3,
-    "zip_recruiter": 4,
-    "google": 4,
-    "remotive": 5,
-    "weworkremotely": 6,
-}
-
-DEFAULT_REQUEST_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (compatible; DotNet-Jobs-Bot/1.0; "
-        "+https://github.com/DotNet-Jobs-Bot; job alerts for developers)"
-    ),
-    "Accept": "application/rss+xml, application/xml, application/json, */*;q=0.8",
-}
-
-# Remotive + We Work Remotely add noise; enable only if you want global remote boards.
-ENABLE_REMOTE_BOARDS = os.getenv("ENABLE_REMOTE_BOARDS", "0") == "1"
-
-# Telegram: only Egypt/Gulf rows unless from trusted sources (posts, Wuzzuf) — see main.py
-STRICT_REGION_FILTER = os.getenv("STRICT_REGION_FILTER", "1") == "1"
-
-# Delay between Wuzzuf keyword hits (be polite to their HTML)
-WUZZUF_DELAY_SEC = float(os.getenv("WUZZUF_DELAY_SEC", "1.5"))
+    LOCATIONS = LOCATIONS[:4]
+    JOBSPY_RESULTS = min(JOBSPY_RESULTS, 10)

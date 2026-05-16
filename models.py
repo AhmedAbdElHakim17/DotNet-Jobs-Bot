@@ -1,4 +1,4 @@
-"""Domain model for a normalized job posting."""
+﻿"""Domain model for a normalized job posting or LinkedIn hiring post."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import List
 
 from config import (
     EXCLUDE_KEYWORDS,
+    HIRING_SIGNALS,
     INCLUDE_KEYWORDS,
     SOURCE_PRIORITY,
     TITLE_EXCLUDE_KEYWORDS,
@@ -15,12 +16,17 @@ from config import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def _exclude_keyword_present(text: str) -> bool:
-    """Substring excludes with word boundaries where needed (avoid Java→JavaScript)."""
+    """Return True if a hard-exclude technology is found (with word-boundary logic)."""
     t = text.lower()
     for w in EXCLUDE_KEYWORDS:
         wl = w.lower()
         if wl == "java":
+            # Avoid matching "JavaScript"
             if re.search(r"\bjava(?!script)\b", t):
                 return True
             continue
@@ -38,6 +44,7 @@ def _exclude_keyword_present(text: str) -> bool:
 
 
 def _title_excluded(title: str) -> bool:
+    """Return True if the title matches leadership or unrelated-platform patterns."""
     tl = title.lower()
     for kw in TITLE_EXCLUDE_KEYWORDS:
         if re.search(r"\b" + re.escape(kw.lower()) + r"\b", tl):
@@ -45,17 +52,35 @@ def _title_excluded(title: str) -> bool:
     for kw in TITLE_PLATFORM_EXCLUDE:
         if re.search(r"\b" + re.escape(kw.lower()) + r"\b", tl):
             return True
-    # Non-engineering / founder spam common on general “tech” boards
     if re.search(r"\bco[- ]?founder\b", tl) or re.search(r"\bcofounder\b", tl):
-        return True
-    if re.search(r"\bfundraising\b", tl):
         return True
     return False
 
 
+# ---------------------------------------------------------------------------
+# Job / Post model
+# ---------------------------------------------------------------------------
+
 @dataclass
 class Job:
-    """Single job alert, regardless of upstream board or RSS feed."""
+    """
+    Unified model for both structured job listings and LinkedIn hiring posts.
+
+    Fields
+    ------
+    id          : stable identifier (URL, feed entry ID, or hash)
+    title       : job title or first line of a post
+    company     : hiring company / post author
+    location    : free-text location string
+    link        : direct URL to apply or view
+    description : full text (used for .NET + hiring-signal matching)
+    posted      : ISO date (YYYY-MM-DD) or humanized fallback ("Recently")
+    salary      : optional salary string
+    source      : one of linkedin_post_rss / linkedin_jobs_rss / wuzzuf / linkedin_jobspy
+    is_post     : True  -> LinkedIn social post (use post Telegram template)
+                  False -> structured job listing
+    matched_keywords : .NET keywords found in this entry (computed on init)
+    """
 
     id: str
     title: str
@@ -63,93 +88,83 @@ class Job:
     location: str
     link: str
     description: str = ""
-    posted: str = ""  # ISO date (YYYY-MM-DD) or humanized fallback
+    posted: str = ""
     salary: str | None = None
-    source: str = "unknown"  # e.g. linkedin_rss, indeed, remotive
-    is_post: bool = False  # True → older “LinkedIn post” style notification
-
+    source: str = "unknown"
+    is_post: bool = False
     matched_keywords: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.matched_keywords:
-            self.matched_keywords = self._compute_match_keywords()
+            self.matched_keywords = self._compute_matched_keywords()
 
-    def _compute_match_keywords(self) -> List[str]:
+    # ------------------------------------------------------------------
+    # Keyword helpers
+    # ------------------------------------------------------------------
+
+    def _compute_matched_keywords(self) -> List[str]:
         text = f"{self.title} {self.company} {self.description} {self.location}"
-        out: List[str] = []
-        for kw in INCLUDE_KEYWORDS:
-            if kw.lower() in text.lower():
-                out.append(kw)
-        return sorted(set(out), key=len, reverse=True)
+        found = {kw for kw in INCLUDE_KEYWORDS if kw.lower() in text.lower()}
+        return sorted(found, key=len, reverse=True)
 
-    def _noisy_board_has_dotnet_signal(self) -> bool:
-        """Remote job boards often need an explicit stack hint beyond fuzzy keyword matches."""
-        if self.source not in ("weworkremotely", "remotive"):
-            return True
-        blob = f"{self.title} {self.description}".lower()
-        hints = (
-            ".net",
-            "dotnet",
-            "c#",
-            "c-sharp",
-            "asp.net",
-            "aspnet",
-            "ef core",
-            "entity framework",
-            "blazor",
-            "full stack .net",
-        )
-        return any(h in blob for h in hints)
+    def hiring_score(self) -> int:
+        """
+        Count how many hiring-intent signals appear in title + description.
+
+        Score guide:
+          0  -> no visible hiring intent  (filter out posts, pass listings)
+          1  -> weak signal
+          2+ -> active hiring announcement  (high priority)
+        """
+        text = f"{self.title} {self.description}".lower()
+        return sum(1 for sig in HIRING_SIGNALS if sig.lower() in text)
+
+    # ------------------------------------------------------------------
+    # Relevance filter
+    # ------------------------------------------------------------------
 
     def is_relevant(self) -> bool:
-        """Strong .NET filter + light tech exclusions + title gating."""
-        text = f"{self.title} {self.company} {self.description} {self.location}".lower()
-        if not self._noisy_board_has_dotnet_signal():
+        """
+        Two-pass filter:
+          1. Must contain at least one .NET keyword anywhere.
+          2. Must not be a hard-excluded technology.
+          3. Job listings: title must pass leadership / platform exclusion.
+          4. LinkedIn posts: must have at least one hiring signal.
+        """
+        text = f"{self.title} {self.company} {self.description} {self.location}"
+
+        # Must match at least one .NET signal
+        if not any(kw.lower() in text.lower() for kw in INCLUDE_KEYWORDS):
             return False
+
+        # Reject hard-excluded stacks
         if _exclude_keyword_present(text):
             return False
-        if _title_excluded(self.title):
-            return False
-        return any(kw.lower() in text for kw in INCLUDE_KEYWORDS)
+
+        if self.is_post:
+            # Posts must show hiring intent to avoid generic .NET discussion noise
+            return self.hiring_score() > 0
+        else:
+            # Job listings must not be leadership/platform roles
+            return not _title_excluded(self.title)
+
+    # ------------------------------------------------------------------
+    # Sorting helpers
+    # ------------------------------------------------------------------
 
     def geo_bucket(self) -> str:
-        """
-        Coarse geo label for sorting / hashtags.
-        Egypt > Gulf > Remote/worldwide > other.
-        """
+        """Coarse geo label for sorting. Egypt > Gulf > Remote > other."""
         text = f"{self.title} {self.location}".lower()
-        if any(
-            x in text
-            for x in (
-                "egypt",
-                "cairo",
-                "giza",
-                "alexandria",
-                "مصر",
-            )
-        ):
+        if any(x in text for x in ("egypt", "cairo", "giza", "alexandria")):
             return "egypt"
-        if any(
-            x in text
-            for x in (
-                "uae",
-                "dubai",
-                "abu dhabi",
-                "saudi",
-                "riyadh",
-                "qatar",
-                "doha",
-                "bahrain",
-                "kuwait",
-                "oman",
-                "gulf",
-            )
-        ):
+        if any(x in text for x in (
+            "uae", "dubai", "abu dhabi", "saudi", "riyadh",
+            "qatar", "doha", "bahrain", "kuwait", "gulf",
+        )):
             return "gulf"
-        if any(x in text for x in ("remote", "worldwide", "anywhere", "work from home")):
+        if any(x in text for x in ("remote", "worldwide", "anywhere")):
             return "remote"
         return "other"
 
     def source_priority(self) -> int:
-        key = self.source.lower().replace(" ", "_")
-        return SOURCE_PRIORITY.get(key, 99)
+        return SOURCE_PRIORITY.get(self.source.lower(), 99)
