@@ -1,54 +1,44 @@
 name: .NET Jobs Bot
-
-on:
+true:
   schedule:
-    - cron: '*/20 * * * *'
-  workflow_dispatch:
-
+  - cron: '*/20 * * * *'
+  workflow_dispatch: null
 permissions:
   contents: write
-
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run .NET Jobs Bot
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
-          LINKEDIN_POSTS_RSS_URLS: ${{ secrets.LINKEDIN_POSTS_RSS_URLS }}
-          LINKEDIN_JOBS_RSS_URLS: ${{ secrets.LINKEDIN_JOBS_RSS_URLS }}
-          LINKEDIN_COOKIE: ${{ secrets.LINKEDIN_COOKIE }}
-          LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
-          LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
-          BOT_CI_FAST: "1"
-        run: python main.py
-
-      - name: Save seen jobs back to repo
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add seen_jobs.json
-          if ! git diff --staged --quiet; then
-            git commit -m "chore: update seen_jobs [skip ci]"
-            python push_seen_jobs.py
-          fi
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: pip
+        cache-dependency-path: requirements.txt
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+    - name: Run .NET Jobs Bot
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
+        LINKEDIN_POSTS_RSS_URLS: ${{ secrets.LINKEDIN_POSTS_RSS_URLS }}
+        LINKEDIN_JOBS_RSS_URLS: ${{ secrets.LINKEDIN_JOBS_RSS_URLS }}
+        LINKEDIN_COOKIE: ${{ secrets.LINKEDIN_COOKIE }}
+        LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
+        LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
+        BOT_CI_FAST: '1'
+      run: python main.py
+    - name: Commit and push seen jobs
+      uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        commit_message: 'chore: update seen_jobs [skip ci]'
+        file_pattern: seen_jobs.json
+        commit_options: --no-verify
+        skip_dirty_check: false
