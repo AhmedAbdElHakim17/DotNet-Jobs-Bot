@@ -31,6 +31,9 @@ from bs4 import BeautifulSoup
 from jobspy import scrape_jobs
 
 from config import (
+    APIFY_API_TOKEN,
+    APIFY_POSTS_PER_QUERY,
+    APIFY_SEARCH_QUERIES,
     DEFAULT_REQUEST_HEADERS,
     HTTP_TIMEOUT_SEC,
     JOBSPY_HOURS_OLD,
@@ -156,6 +159,94 @@ def _parse_rss_to_jobs(content: bytes, source: str, is_post: bool) -> list[Job]:
 
     logger.info("RSS (%s): parsed %d entries", source, len(jobs))
     return jobs
+
+
+# ---------------------------------------------------------------------------
+# Source 0 — Apify LinkedIn Posts Scraper  (BEST for posts — no login needed)
+# ---------------------------------------------------------------------------
+
+def fetch_apify_linkedin_posts() -> list[Job]:
+    """
+    Scrape LinkedIn hiring posts via Apify's no-cookie actor.
+
+    Actor: apimaestro/linkedin-posts-search-scraper-no-cookies
+    Requires: APIFY_API_TOKEN in .env / GitHub Secrets
+
+    Runs APIFY_SEARCH_QUERIES sequentially (one API call each).
+    Each query searches the last 24 h and returns APIFY_POSTS_PER_QUERY posts.
+    """
+    if not APIFY_API_TOKEN:
+        logger.info("Apify: APIFY_API_TOKEN not set — skipping. See README to enable.")
+        return []
+
+    try:
+        from apify_client import ApifyClient  # type: ignore
+    except ImportError:
+        logger.warning("apify-client not installed. Run: pip install apify-client")
+        return []
+
+    client = ApifyClient(APIFY_API_TOKEN)
+    all_posts: list[Job] = []
+    seen_ids: set[str] = set()
+
+    for query in APIFY_SEARCH_QUERIES:
+        try:
+            run = client.actor(
+                "apimaestro/linkedin-posts-search-scraper-no-cookies"
+            ).call(
+                run_input={
+                    "searchKeywords": query,
+                    "sortType": "date_posted",
+                    "datePosted": "24h",
+                    "totalPostsToScrape": APIFY_POSTS_PER_QUERY,
+                },
+                timeout_secs=120,
+            )
+
+            dataset_id = (run or {}).get("defaultDatasetId", "")
+            if not dataset_id:
+                logger.warning("Apify: no dataset returned for query %r", query[:60])
+                continue
+
+            for item in client.dataset(dataset_id).iterate_items():
+                post_url: str = item.get("postUrl") or item.get("url") or ""
+                text: str = item.get("postContent") or item.get("text") or ""
+                author: str = item.get("authorName") or item.get("author") or ""
+                published: str = item.get("publishedAt") or item.get("date") or ""
+
+                if not text:
+                    continue
+
+                post_id = post_url or _sha16(text[:80])
+                if post_id in seen_ids:
+                    continue
+                seen_ids.add(post_id)
+
+                # Parse ISO date if available
+                posted = "Recently"
+                if published:
+                    try:
+                        posted = datetime.fromisoformat(str(published)[:10]).date().isoformat()
+                    except Exception:
+                        pass
+
+                all_posts.append(Job(
+                    id=post_id,
+                    title=text.split("\n")[0][:120],
+                    company=author,
+                    location="",
+                    link=post_url,
+                    description=text[:6000],
+                    posted=posted,
+                    source="apify_linkedin",
+                    is_post=True,
+                ))
+
+        except Exception as e:
+            logger.warning("Apify query failed %r: %s", query[:60], e)
+
+    logger.info("Apify LinkedIn: %d posts collected", len(all_posts))
+    return all_posts
 
 
 # ---------------------------------------------------------------------------
@@ -475,6 +566,7 @@ def fetch_jobs() -> list[Job]:
     geo_rank = {"egypt": 0, "gulf": 1, "remote": 2, "other": 3}
 
     combined: list[Job] = []
+    combined.extend(fetch_apify_linkedin_posts())
     combined.extend(fetch_linkedin_posts_rss())
     combined.extend(fetch_linkedin_jobs_rss())
     combined.extend(fetch_wuzzuf_jobs())

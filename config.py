@@ -106,6 +106,30 @@ LINKEDIN_POSTS_RSS_URLS: List[str] = _parse_urls(os.getenv("LINKEDIN_POSTS_RSS_U
 LINKEDIN_JOBS_RSS_URLS: List[str] = _parse_urls(os.getenv("LINKEDIN_JOBS_RSS_URLS", ""))
 
 # ---------------------------------------------------------------------------
+# Apify LinkedIn Posts Scraper  <-- RECOMMENDED for reliable post search
+#
+# Uses actor: apimaestro/linkedin-posts-search-scraper-no-cookies
+# No LinkedIn login required. Searches LinkedIn posts by keyword + date.
+#
+# Setup:
+#   1. Sign up at https://apify.com (free tier: $5/month credits)
+#   2. Go to Settings -> Integrations -> API tokens -> copy your token
+#   3. Set: APIFY_API_TOKEN=apify_api_XXXX
+#
+# Cost note: ~0.001 CU per 10 posts. Running every 10 min = ~$0.40/day.
+#   Reduce APIFY_POSTS_PER_QUERY or run less frequently if on free tier.
+# ---------------------------------------------------------------------------
+APIFY_API_TOKEN: str = os.getenv("APIFY_API_TOKEN", "")
+APIFY_POSTS_PER_QUERY: int = int(os.getenv("APIFY_POSTS_PER_QUERY", "10"))
+
+# Targeted search queries sent to the Apify actor (one API call each)
+APIFY_SEARCH_QUERIES: List[str] = [
+    '(".NET" OR "C#" OR "ASP.NET") AND ("hiring" OR "looking for" OR "vacancy") AND "Egypt"',
+    '(".NET" OR "C#" OR "ASP.NET") AND ("hiring" OR "looking for" OR "vacancy") AND ("UAE" OR "Dubai" OR "Saudi")',
+    '(".NET developer" OR "C# developer") AND ("hiring" OR "open position" OR "open role")',
+]
+
+# ---------------------------------------------------------------------------
 # LinkedIn unofficial API  (optional -- frequently blocked by LinkedIn)
 # Prefer LINKEDIN_COOKIE (li_at session cookie) over email/password.
 #   Get it: linkedin.com -> DevTools (F12) -> Application -> Cookies -> li_at
@@ -150,7 +174,8 @@ JOBSPY_MAX_WORKERS: int = int(os.getenv("JOBSPY_MAX_WORKERS", "4"))
 # Source priority -- lower value = sent to Telegram first
 # ---------------------------------------------------------------------------
 SOURCE_PRIORITY: Dict[str, int] = {
-    "linkedin_post_rss": 0,   # LinkedIn feed posts via RSS  <- fastest hiring signal
+    "apify_linkedin": 0,      # Apify LinkedIn post scrape  <- no-cookie, date-filtered
+    "linkedin_post_rss": 0,   # LinkedIn feed posts via RSS
     "linkedin_jobs_rss": 1,   # LinkedIn job listings via RSS
     "wuzzuf": 2,              # Wuzzuf Egypt board
     "linkedin_jobspy": 3,     # JobSpy LinkedIn fallback

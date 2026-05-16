@@ -34,11 +34,12 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          LINKEDIN_RSS_URLS: ${{ secrets.LINKEDIN_RSS_URLS }}
+          APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
+          LINKEDIN_POSTS_RSS_URLS: ${{ secrets.LINKEDIN_POSTS_RSS_URLS }}
+          LINKEDIN_JOBS_RSS_URLS: ${{ secrets.LINKEDIN_JOBS_RSS_URLS }}
+          LINKEDIN_COOKIE: ${{ secrets.LINKEDIN_COOKIE }}
           LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
           LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
-          ENABLE_REMOTE_BOARDS: "0"
-          STRICT_REGION_FILTER: "1"
           BOT_CI_FAST: "1"
         run: python main.py
 
