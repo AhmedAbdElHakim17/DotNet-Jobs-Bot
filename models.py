@@ -127,15 +127,18 @@ class Job:
         """
         Two-pass filter:
           1. Must contain at least one .NET keyword anywhere.
+             (Skipped for apify_linkedin — the search query already guarantees .NET relevance.)
           2. Must not be a hard-excluded technology.
           3. Job listings: title must pass leadership / platform exclusion.
           4. LinkedIn posts: must have at least one hiring signal.
         """
         text = f"{self.title} {self.company} {self.description} {self.location}"
 
-        # Must match at least one .NET signal
-        if not any(kw.lower() in text.lower() for kw in INCLUDE_KEYWORDS):
-            return False
+        # Apify queries are pre-filtered for .NET, so trust the query result.
+        # For all other sources, require at least one .NET keyword in the text.
+        if self.source != "apify_linkedin":
+            if not any(kw.lower() in text.lower() for kw in INCLUDE_KEYWORDS):
+                return False
 
         # Reject hard-excluded stacks
         if _exclude_keyword_present(text):

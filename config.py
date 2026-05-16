@@ -28,6 +28,7 @@ INCLUDE_KEYWORDS: List[str] = [
     ".NET", "C#", "ASP.NET", "ASP.NET Core", "EF Core", "Entity Framework",
     "Microservices", "RabbitMQ", "Clean Architecture", "Full Stack .NET",
     "Blazor", "Hangfire", "MediatR", "CQRS", "Dapper", "SignalR", "Backend .NET",
+    "dotnet", "dot net",  # common LinkedIn post variants of ".NET"
 ]
 
 EXCLUDE_KEYWORDS: List[str] = [
