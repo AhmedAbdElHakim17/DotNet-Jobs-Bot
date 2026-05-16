@@ -199,6 +199,7 @@ def fetch_apify_linkedin_posts() -> list[Job]:
                     "sortType": "date_posted",
                     "datePosted": "24h",
                     "totalPostsToScrape": APIFY_POSTS_PER_QUERY,
+                    "limit": APIFY_POSTS_PER_QUERY,  # actor default is 50; cap it explicitly
                 },
                 timeout_secs=120,
             )

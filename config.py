@@ -121,7 +121,7 @@ LINKEDIN_JOBS_RSS_URLS: List[str] = _parse_urls(os.getenv("LINKEDIN_JOBS_RSS_URL
 #   Reduce APIFY_POSTS_PER_QUERY or run less frequently if on free tier.
 # ---------------------------------------------------------------------------
 APIFY_API_TOKEN: str = os.getenv("APIFY_API_TOKEN", "")
-APIFY_POSTS_PER_QUERY: int = int(os.getenv("APIFY_POSTS_PER_QUERY", "10"))
+APIFY_POSTS_PER_QUERY: int = int(os.getenv("APIFY_POSTS_PER_QUERY", "5"))
 
 # Targeted search queries sent to the Apify actor (one API call each)
 APIFY_SEARCH_QUERIES: List[str] = [
